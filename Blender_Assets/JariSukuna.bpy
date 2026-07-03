@@ -1,0 +1,322 @@
+"""
+============================================================
+  JARI SUKUNA v2 — Blender Python Script (bpy)
+  Fix: ValueError faces.new duplicate vertex
+  Fix: Material kuku tidak terbawa setelah join
+============================================================
+"""
+
+import bpy
+import bmesh
+import math
+from mathutils import Vector
+
+# ============================================================
+#  LANGKAH 0: BERSIHKAN SCENE
+# ============================================================
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+for mesh in bpy.data.meshes:
+    bpy.data.meshes.remove(mesh)
+for mat in bpy.data.materials:
+    bpy.data.materials.remove(mat)
+print("Scene dibersihkan.")
+
+# ============================================================
+#  LANGKAH 1: BUAT MATERIAL
+# ============================================================
+
+def create_material(name, r, g, b, roughness=0.7, metallic=0.0):
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    mat.diffuse_color = (r, g, b, 1.0)
+    nodes = mat.node_tree.nodes
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (400, 0)
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (0, 0)
+    bsdf.inputs["Base Color"].default_value = (r, g, b, 1.0)
+    bsdf.inputs["Roughness"].default_value  = roughness
+    bsdf.inputs["Metallic"].default_value   = metallic
+    mat.node_tree.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+    return mat
+
+# Material 0: Kulit iblis — ungu gelap kemerahan
+mat_skin = create_material("Mat_KulitIblis", 0.25, 0.05, 0.20, roughness=0.75)
+
+# Material 1: Kuku — hitam pekat, sedikit glossy
+mat_nail = create_material("Mat_KukuIblis",  0.04, 0.03, 0.04, roughness=0.30, metallic=0.15)
+
+print("Material dibuat.")
+
+# ============================================================
+#  LANGKAH 2: BUAT MESH JARI
+#
+#  13 ring lingkaran bertumpuk, radius + offset bervariasi
+#  agar menghasilkan ruas organik (pangkal tebal, ujung lancip).
+# ============================================================
+
+SEGMENTS = 12   # jumlah sisi per ring — 12 cukup bulat tanpa terlalu berat
+
+# Setiap baris: (y_position, radius, offset_x, offset_z)
+# y        = tinggi dari bawah
+# radius   = lebar jari di titik itu
+# offset_x = geser kanan/kiri (lekukan lateral)
+# offset_z = geser depan/belakang (lekukan jari)
+RINGS = [
+    (0.00, 0.090, 0.000, 0.000),   # pangkal bawah — paling tebal
+    (0.10, 0.095, 0.000, 0.000),   # sedikit membengkak di pangkal
+    (0.20, 0.085, 0.002, 0.001),   # ruas 1 mulai
+    (0.31, 0.073, 0.005, 0.003),   # lipatan sendi 1 (mengecil)
+    (0.36, 0.070, 0.008, 0.006),   # transisi sendi 1
+    (0.43, 0.074, 0.012, 0.010),   # ruas 2 (sedikit mengembang)
+    (0.52, 0.065, 0.018, 0.015),   # lipatan sendi 2
+    (0.57, 0.060, 0.022, 0.018),   # transisi sendi 2
+    (0.64, 0.057, 0.028, 0.022),   # ruas 3
+    (0.70, 0.048, 0.033, 0.025),   # mulai ujung
+    (0.76, 0.036, 0.037, 0.027),   # ujung mengecil
+    (0.81, 0.022, 0.040, 0.028),   # sangat ujung
+    (0.84, 0.008, 0.042, 0.027),   # puncak (hampir menutup)
+]
+
+bm_finger = bmesh.new()
+all_rings = []
+
+for (y, radius, ox, oz) in RINGS:
+    ring = []
+    for i in range(SEGMENTS):
+        angle = (2 * math.pi * i) / SEGMENTS
+        x = math.cos(angle) * radius + ox
+        z = math.sin(angle) * radius + oz
+        v = bm_finger.verts.new((x, y, z))
+        ring.append(v)
+    all_rings.append(ring)
+
+# Tutup bagian bawah
+bm_finger.faces.new(list(reversed(all_rings[0])))
+
+# Sambung ring-ring dengan quad faces
+for i in range(len(all_rings) - 1):
+    curr = all_rings[i]
+    nxt  = all_rings[i + 1]
+    for j in range(SEGMENTS):
+        j2 = (j + 1) % SEGMENTS
+        bm_finger.faces.new([curr[j], curr[j2], nxt[j2], nxt[j]])
+
+# Tutup bagian atas (ujung jari)
+bm_finger.faces.new(all_rings[-1])
+
+bm_finger.normal_update()
+
+# Buat mesh + objek untuk jari
+mesh_finger = bpy.data.meshes.new("JariMesh")
+bm_finger.to_mesh(mesh_finger)
+bm_finger.free()
+
+# Assign material kulit ke SEMUA face jari
+mesh_finger.materials.append(mat_skin)   # index 0
+for poly in mesh_finger.polygons:
+    poly.material_index = 0
+
+obj_finger = bpy.data.objects.new("Item_JariSukuna", mesh_finger)
+bpy.context.collection.objects.link(obj_finger)
+print("Mesh jari dibuat.")
+
+# ============================================================
+#  LANGKAH 3: BUAT MESH KUKU
+#
+#  FIX dari v1: tidak ada face dengan vertex duplikat.
+#  Kuku = grid sederhana yang melengkung di ujung jari.
+#  Dibuat dengan row × col vertex grid, lalu disambung quad.
+# ============================================================
+
+NAIL_COLS = 8   # lebar kuku (kiri ke kanan)
+NAIL_ROWS = 6   # panjang kuku (pangkal ke ujung)
+
+bm_nail = bmesh.new()
+nail_grid = []  # nail_grid[row][col]
+
+for row in range(NAIL_ROWS):
+    t_row = row / (NAIL_ROWS - 1)   # 0.0 = pangkal kuku, 1.0 = ujung
+
+    # Y: kuku muncul di 65% tinggi jari ke atas
+    y = 0.65 + t_row * 0.22
+
+    # Lebar menyempit ke ujung
+    half_w = (1 - t_row ** 1.2) * 0.048 + 0.004
+
+    # Melengkung ke luar (sumbu Z) makin ke ujung
+    z_curve = 0.058 + t_row * 0.030
+
+    # Ketebalan kuku menipis ke ujung
+    thickness = (1 - t_row) * 0.012 + 0.002
+
+    row_verts = []
+    for col in range(NAIL_COLS):
+        t_col = col / (NAIL_COLS - 1)   # 0.0 = kiri, 1.0 = kanan
+
+        # X: distribusi dari -half_w ke +half_w
+        x = (t_col - 0.5) * 2 * half_w
+
+        # Lengkungan melintang: tengah lebih menonjol dari tepi
+        curve_factor = 1 - (2 * t_col - 1) ** 2   # parabola, 0 di tepi, 1 di tengah
+        z = z_curve + curve_factor * thickness
+
+        v = bm_nail.verts.new((x, y, z))
+        row_verts.append(v)
+    nail_grid.append(row_verts)
+
+# Sambung grid dengan quad faces (TIDAK ada vertex duplikat)
+for row in range(NAIL_ROWS - 1):
+    for col in range(NAIL_COLS - 1):
+        v0 = nail_grid[row][col]
+        v1 = nail_grid[row][col + 1]
+        v2 = nail_grid[row + 1][col + 1]
+        v3 = nail_grid[row + 1][col]
+        bm_nail.faces.new([v0, v1, v2, v3])
+
+bm_nail.normal_update()
+
+# Buat mesh + objek untuk kuku
+mesh_nail = bpy.data.meshes.new("KukuMesh")
+bm_nail.to_mesh(mesh_nail)
+bm_nail.free()
+
+# Assign material kuku ke SEMUA face
+mesh_nail.materials.append(mat_nail)    # index 0
+for poly in mesh_nail.polygons:
+    poly.material_index = 0
+
+obj_nail = bpy.data.objects.new("KukuTemp", mesh_nail)
+bpy.context.collection.objects.link(obj_nail)
+print("Mesh kuku dibuat.")
+
+# ============================================================
+#  LANGKAH 4: TRANSFER MATERIAL KUKU KE OBJEK JARI
+#
+#  FIX untuk masalah warna hilang setelah join:
+#  Kita TIDAK mengandalkan join untuk merge material.
+#  Sebaliknya, kita:
+#  1. Tambah mat_nail sebagai slot ke-2 di mesh_finger
+#  2. Tandai face kuku di mesh_finger dengan material_index = 1
+#  3. Pindahkan vertex kuku ke mesh_finger via bmesh merge
+#
+#  Cara ini 100% reliable — material tidak hilang setelah join.
+# ============================================================
+
+# Tambah material kuku sebagai slot kedua di objek jari
+obj_finger.data.materials.append(mat_nail)   # index 1 = kuku
+
+# Sekarang merge mesh kuku ke mesh jari via bmesh
+bm_merge = bmesh.new()
+bm_merge.from_mesh(obj_finger.data)    # muat mesh jari yang sudah ada
+
+# Buat dictionary wajib untuk from_mesh
+# Kita buat ulang kuku langsung di bmesh yang sudah berisi jari
+# sehingga material_index bisa kita set langsung ke 1
+
+nail_verts_in_main = []
+for row in range(NAIL_ROWS):
+    t_row = row / (NAIL_ROWS - 1)
+    y = 0.65 + t_row * 0.22
+    half_w = (1 - t_row ** 1.2) * 0.048 + 0.004
+    z_curve = 0.058 + t_row * 0.030
+    thickness = (1 - t_row) * 0.012 + 0.002
+
+    row_v = []
+    for col in range(NAIL_COLS):
+        t_col = col / (NAIL_COLS - 1)
+        x = (t_col - 0.5) * 2 * half_w
+        curve_factor = 1 - (2 * t_col - 1) ** 2
+        z = z_curve + curve_factor * thickness
+        v = bm_merge.verts.new((x, y, z))
+        row_v.append(v)
+    nail_verts_in_main.append(row_v)
+
+# Buat faces kuku dengan material_index = 1 (kuku)
+for row in range(NAIL_ROWS - 1):
+    for col in range(NAIL_COLS - 1):
+        v0 = nail_verts_in_main[row][col]
+        v1 = nail_verts_in_main[row][col + 1]
+        v2 = nail_verts_in_main[row + 1][col + 1]
+        v3 = nail_verts_in_main[row + 1][col]
+        face = bm_merge.faces.new([v0, v1, v2, v3])
+        face.material_index = 1   # <-- kuku pakai material slot 1
+
+bm_merge.normal_update()
+bm_merge.to_mesh(obj_finger.data)
+bm_merge.free()
+
+# Hapus objek kuku sementara (sudah tidak dibutuhkan)
+bpy.data.objects.remove(obj_nail, do_unlink=True)
+bpy.data.meshes.remove(mesh_nail)
+
+print("Material kuku berhasil di-embed ke mesh jari.")
+
+# ============================================================
+#  LANGKAH 5: MODIFIER
+# ============================================================
+
+bpy.context.view_layer.objects.active = obj_finger
+obj_finger.select_set(True)
+
+# Subdivision Surface — memperhalus geometry
+subdiv = obj_finger.modifiers.new(name="Subdivision", type='SUBSURF')
+subdiv.levels        = 2
+subdiv.render_levels = 2
+
+# Smooth shading
+bpy.ops.object.shade_smooth()
+print("Modifier Subdivision Surface ditambahkan, smooth shading aktif.")
+
+# ============================================================
+#  LANGKAH 6: ATUR ORIGIN KE TENGAH-BAWAH
+# ============================================================
+
+obj_finger.location = (0, 0, 0)
+bpy.ops.object.select_all(action='DESELECT')
+obj_finger.select_set(True)
+bpy.context.view_layer.objects.active = obj_finger
+
+bbox = [obj_finger.matrix_world @ Vector(c) for c in obj_finger.bound_box]
+min_y   = min(v.y for v in bbox)
+cx      = sum(v.x for v in bbox) / 8
+cz      = sum(v.z for v in bbox) / 8
+
+bpy.context.scene.cursor.location = (cx, min_y, cz)
+bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+obj_finger.location = (0, 0, 0)
+print("Origin diatur ke tengah-bawah.")
+
+# ============================================================
+#  LANGKAH 7: SCALE UP & APPLY
+# ============================================================
+
+obj_finger.scale = (3.5, 3.5, 3.5)
+bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+print("Scale 3.5x diterapkan.")
+
+# ============================================================
+#  SELESAI
+# ============================================================
+skin_mat_name = obj_finger.data.materials[0].name
+nail_mat_name = obj_finger.data.materials[1].name if len(obj_finger.data.materials) > 1 else "TIDAK ADA"
+
+print("\n" + "="*52)
+print("  JARI SUKUNA v2 BERHASIL DIGENERATE!")
+print("="*52)
+print(f"  Objek      : {obj_finger.name}")
+print(f"  Material 0 : {skin_mat_name}  (Kulit — ungu gelap)")
+print(f"  Material 1 : {nail_mat_name} (Kuku — hitam glossy)")
+print(f"  Modifier   : Subdivision Surface level 2")
+print(f"  Origin     : Tengah-bawah")
+print("="*52)
+print("\nCARA EXPORT KE FBX:")
+print("  File → Export → FBX (.fbx)")
+print("  ✓ Apply Scalings : FBX Units Scale")
+print("  ✓ Forward        : -Z Forward")
+print("  ✓ Up             : Y Up")
+print("  ✓ Apply Modifiers: CENTANG  ← penting!")
+print("  ✓ Apply Transform: CENTANG")
+print("="*52)

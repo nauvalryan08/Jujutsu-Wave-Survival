@@ -1,0 +1,275 @@
+"""
+================================================================
+ ITEM 1: SEPATU JJK (SPEED BOOST) - HIGH DETAIL GENERATOR
+ (VERSI REVISI: FIX KOORDINAT & WARNA AMBIENT MALAM)
+================================================================
+"""
+
+import bpy
+import bmesh
+import math
+from mathutils import Vector
+
+
+# ================================================================
+# KONFIGURASI
+# ================================================================
+
+LOCATION = (0, 0, 0)     
+
+# Ukuran dasar (satuan Blender)
+SOLE_LENGTH = 1.9
+SOLE_WIDTH = 0.75
+SOLE_THICKNESS = 0.18
+
+BODY_LENGTH = 1.55
+BODY_WIDTH = 0.62
+BODY_HEIGHT = 0.55
+
+BEVEL_WIDTH = 0.015
+BEVEL_SEGMENTS = 3
+
+# PERUBAHAN WARNA (Sesuai Ambient Malam)
+COLOR_BODY = (0.9, 0.9, 0.9, 1.0)        # Putih keabu-abuan
+COLOR_SOLE = (0.35, 0.35, 0.35, 1.0)     # Abu-abu gelap
+COLOR_LACE = (0.04, 0.04, 0.04, 1.0)     # Hitam gelap
+
+
+# ================================================================
+# UTILITAS
+# ================================================================
+
+def clear_scene():
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+    for block in bpy.data.meshes:
+        if block.users == 0:
+            bpy.data.meshes.remove(block)
+    for mat in bpy.data.materials:
+        if mat.users == 0:
+            bpy.data.materials.remove(mat)
+
+def create_material(name, color, roughness=0.4):
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    mat.diffuse_color = color
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = color
+        if "Roughness" in bsdf.inputs:
+            bsdf.inputs["Roughness"].default_value = roughness
+    return mat
+
+def assign_material_to_object(obj, mat):
+    obj.data.materials.append(mat)
+
+
+# ================================================================
+# BAGIAN-BAGIAN SEPATU
+# ================================================================
+
+def create_sole(mat_sole):
+    x, y = LOCATION[0], LOCATION[1]
+    z_center = SOLE_THICKNESS / 2
+
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(x, y + 0.1, z_center))
+    sole = bpy.context.object
+    
+    # FIX: Menghilangkan pembagian agar skala 1:1 dengan dimensi asli
+    sole.scale = (SOLE_WIDTH, SOLE_LENGTH, SOLE_THICKNESS)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(sole.data)
+    for v in bm.verts:
+        if v.co.y > 0.9:      
+            v.co.x *= 0.6
+        elif v.co.y < -0.9:   
+            v.co.x *= 0.75
+    bmesh.update_edit_mesh(sole.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    assign_material_to_object(sole, mat_sole)
+    return sole
+
+def create_toe_cap(mat_sole):
+    x, y = LOCATION[0], LOCATION[1]
+    # FIX: Menggunakan sphere yang dipipihkan, bukan cone, agar ujung membulat sempurna
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        radius=1, segments=16, ring_count=8,
+        location=(x, y + 0.95, SOLE_THICKNESS + 0.1)
+    )
+    toe = bpy.context.object
+    toe.scale = (SOLE_WIDTH * 0.42, 0.25, 0.18)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    assign_material_to_object(toe, mat_sole)
+    return toe
+
+def create_body(mat_body):
+    x, y = LOCATION[0], LOCATION[1]
+    z_center = SOLE_THICKNESS + (BODY_HEIGHT / 2)
+
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(x, y + 0.05, z_center))
+    body = bpy.context.object
+    body.scale = (BODY_WIDTH, BODY_LENGTH, BODY_HEIGHT)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(body.data)
+    for v in bm.verts:
+        if v.co.z > 0.4:          
+            v.co.x *= 0.65
+        if v.co.y > 0.4:          
+            v.co.x *= 0.7
+            v.co.z *= 0.85
+        elif v.co.y < -0.4:       
+            v.co.x *= 0.8
+    bmesh.update_edit_mesh(body.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    assign_material_to_object(body, mat_body)
+    return body
+
+def create_ankle_collar(mat_body):
+    x, y = LOCATION[0], LOCATION[1]
+    # FIX: Offset Y dimundurkan agar sejajar dengan tumit
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=1, depth=1, vertices=16,
+        location=(x, y - 0.55, SOLE_THICKNESS + BODY_HEIGHT - 0.05)
+    )
+    collar = bpy.context.object
+    collar.scale = (BODY_WIDTH * 0.45, 0.35, 0.35)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    assign_material_to_object(collar, mat_body)
+    return collar
+
+def create_tongue(mat_body):
+    x, y = LOCATION[0], LOCATION[1]
+    bpy.ops.mesh.primitive_cube_add(
+        size=1, location=(x, y + 0.28, SOLE_THICKNESS + BODY_HEIGHT + 0.08)
+    )
+    tongue = bpy.context.object
+    tongue.scale = (0.45, 0.6, 0.16)
+    tongue.rotation_euler = (math.radians(-15), 0, 0)
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+    assign_material_to_object(tongue, mat_body)
+    return tongue
+
+def create_laces(mat_lace):
+    x, y = LOCATION[0], LOCATION[1]
+    lace_objs = []
+    # FIX: Jarak Y dikalibrasi agar pas berada di atas lidah sepatu
+    lace_positions_y = [0.65, 0.48, 0.31, 0.14]  
+
+    for ly in lace_positions_y:
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.018, depth=0.6, vertices=8,
+            location=(x, y + ly, SOLE_THICKNESS + BODY_HEIGHT + 0.12),
+            rotation=(math.radians(90), 0, math.radians(35))
+        )
+        lace1 = bpy.context.object
+        assign_material_to_object(lace1, mat_lace)
+        lace_objs.append(lace1)
+
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.018, depth=0.6, vertices=8,
+            location=(x, y + ly, SOLE_THICKNESS + BODY_HEIGHT + 0.12),
+            rotation=(math.radians(90), 0, math.radians(-35))
+        )
+        lace2 = bpy.context.object
+        assign_material_to_object(lace2, mat_lace)
+        lace_objs.append(lace2)
+
+    for ly in lace_positions_y:
+        for side in (-1, 1):
+            bpy.ops.mesh.primitive_cylinder_add(
+                radius=0.035, depth=0.05, vertices=8,
+                location=(x + side * 0.28, y + ly, SOLE_THICKNESS + BODY_HEIGHT + 0.06),
+                rotation=(0, math.radians(90), 0)
+            )
+            eyelet = bpy.context.object
+            assign_material_to_object(eyelet, mat_lace)
+            lace_objs.append(eyelet)
+
+    return lace_objs
+
+
+# ================================================================
+# GENERATE SEPATU LENGKAP
+# ================================================================
+
+def create_sepatu_jjk():
+    mat_body = create_material("Mat_Sepatu_Body", COLOR_BODY, roughness=0.35)
+    mat_sole = create_material("Mat_Sepatu_Sole", COLOR_SOLE, roughness=0.5)
+    mat_lace = create_material("Mat_Sepatu_Lace", COLOR_LACE, roughness=0.6)
+
+    sole = create_sole(mat_sole)
+    toe_cap = create_toe_cap(mat_sole)
+    body = create_body(mat_body)
+    collar = create_ankle_collar(mat_body)
+    tongue = create_tongue(mat_body)
+    laces = create_laces(mat_lace)
+
+    all_parts = [sole, toe_cap, body, collar, tongue] + laces
+
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in all_parts:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = sole
+    bpy.ops.object.join()
+
+    final_obj = bpy.context.view_layer.objects.active
+    final_obj.name = "Item_Sepatu"
+    final_obj.data.name = "Item_Sepatu_Mesh"
+
+    bevel_mod = final_obj.modifiers.new(name="Bevel_Smooth", type='BEVEL')
+    bevel_mod.width = BEVEL_WIDTH
+    bevel_mod.segments = BEVEL_SEGMENTS
+    bevel_mod.limit_method = 'ANGLE'
+    bevel_mod.angle_limit = math.radians(45)
+
+    bpy.context.view_layer.objects.active = final_obj
+    bpy.ops.object.modifier_apply(modifier=bevel_mod.name)
+
+    for poly in final_obj.data.polygons:
+        poly.use_smooth = True
+
+    bbox_world = [final_obj.matrix_world @ Vector(corner) for corner in final_obj.bound_box]
+    min_z = min(v.z for v in bbox_world)
+    center_x = sum(v.x for v in bbox_world) / 8
+    center_y = sum(v.y for v in bbox_world) / 8
+
+    cursor = bpy.context.scene.cursor
+    original_cursor_loc = cursor.location.copy()
+    cursor.location = (center_x, center_y, min_z)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    final_obj.select_set(True)
+    bpy.context.view_layer.objects.active = final_obj
+    bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
+
+    cursor.location = original_cursor_loc 
+
+    print(f"✅ '{final_obj.name}' berhasil dibuat dengan {len(final_obj.data.materials)} material slot.")
+    for i, m in enumerate(final_obj.data.materials):
+        print(f"   - Slot {i}: {m.name}")
+    print(f"   - Origin diletakkan di bawah sol: {tuple(round(c,3) for c in final_obj.location)}")
+
+    return final_obj
+
+def main():
+    clear_scene()
+    obj = create_sepatu_jjk()
+
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            with bpy.context.temp_override(area=area):
+                bpy.ops.object.select_all(action='DESELECT')
+                obj.select_set(True)
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.view3d.view_selected()
+            break
+    print("✅ Generate selesai: Item_Sepatu siap di-export ke FBX.")
+
+if __name__ == "__main__":
+    main()

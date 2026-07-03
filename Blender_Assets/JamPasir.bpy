@@ -1,0 +1,305 @@
+"""
+================================================================
+ ITEM 5: JAM PASIR (COOLDOWN REDUCTION) - HIGH DETAIL GENERATOR
+================================================================
+Script standalone untuk generate model jam pasir klasik dengan:
+    - Tabung kaca: 2 cone terbalik menyatu di tengah
+    - Tutup silinder elegan di atas & bawah
+    - 4 pilar penyangga mengelilingi kaca
+    - Aksen tumpukan pasir (cone kecil) di dasar & puncak
+    - Smooth shading di seluruh bagian melengkung
+    - 3 material slot (Rangka=Kayu/Emas Gelap, Kaca=Putih/Biru Muda,
+      Pasir=Kuning Keemasan)
+    - Origin tepat di DASAR BAWAH tutup bawah (agar berdiri tegak)
+
+Cara pakai:
+    1. Buka Blender -> tab "Scripting"
+    2. Paste script ini ke text editor
+    3. Run Script (Alt+P)
+    4. Object "Item_JamPasir" siap di-export ke FBX
+================================================================
+"""
+
+import bpy
+import math
+from mathutils import Vector
+
+
+# ================================================================
+# KONFIGURASI
+# ================================================================
+
+LOCATION = (0, 0, 0)          # posisi dasar (X,Y), alas tutup bawah menyentuh Z=0
+
+CONE_RADIUS = 0.38
+CONE_HEIGHT = 0.55
+CAP_RADIUS = 0.42
+CAP_THICKNESS = 0.09
+
+PILLAR_RADIUS = 0.035
+PILLAR_OFFSET = CONE_RADIUS * 0.98   # jarak pilar dari sumbu tengah
+
+SAND_BASE_RADIUS = 0.28
+SAND_BASE_HEIGHT = 0.16
+SAND_TOP_RADIUS = 0.16
+SAND_TOP_HEIGHT = 0.08
+
+COLOR_FRAME = (0.30, 0.18, 0.08, 1.0)     # Cokelat kayu / emas gelap
+COLOR_GLASS = (0.85, 0.93, 1.0, 0.35)     # Putih terang / biru sangat muda (transparan)
+COLOR_SAND = (0.95, 0.72, 0.15, 1.0)      # Kuning keemasan terang
+
+
+# ================================================================
+# UTILITAS
+# ================================================================
+
+def clear_scene():
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+    for block in bpy.data.meshes:
+        if block.users == 0:
+            bpy.data.meshes.remove(block)
+    for mat in bpy.data.materials:
+        if mat.users == 0:
+            bpy.data.materials.remove(mat)
+
+
+def create_material(name, color, roughness=0.4, emission_strength=0.0, metallic=0.0):
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    mat.diffuse_color = color
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = color
+        if "Roughness" in bsdf.inputs:
+            bsdf.inputs["Roughness"].default_value = roughness
+        if "Metallic" in bsdf.inputs:
+            bsdf.inputs["Metallic"].default_value = metallic
+        if emission_strength > 0:
+            if "Emission Color" in bsdf.inputs:
+                bsdf.inputs["Emission Color"].default_value = color
+                bsdf.inputs["Emission Strength"].default_value = emission_strength
+            elif "Emission" in bsdf.inputs:
+                bsdf.inputs["Emission"].default_value = color
+                bsdf.inputs["Emission Strength"].default_value = emission_strength
+        if len(color) > 3 and color[3] < 1.0:
+            mat.blend_method = 'BLEND'
+            if "Alpha" in bsdf.inputs:
+                bsdf.inputs["Alpha"].default_value = color[3]
+    return mat
+
+
+def assign_material_to_object(obj, mat):
+    obj.data.materials.append(mat)
+
+
+def apply_smooth_shading(obj):
+    for poly in obj.data.polygons:
+        poly.use_smooth = True
+
+
+# ================================================================
+# BAGIAN 1: TABUNG KACA (2 CONE MENYATU DI TENGAH)
+# ================================================================
+
+def create_glass_tube(mat_glass):
+    """Cone atas (mengerucut ke bawah) + cone bawah (mengerucut ke atas),
+    bertemu tepat di titik tengah (pinggang jam pasir)."""
+    z_waist = CAP_THICKNESS + CONE_HEIGHT  # titik pertemuan kedua cone
+
+    bpy.ops.mesh.primitive_cone_add(
+        radius1=CONE_RADIUS, radius2=0.015, depth=CONE_HEIGHT, vertices=16,
+        location=(LOCATION[0], LOCATION[1], z_waist - CONE_HEIGHT / 2)
+    )
+    cone_bawah = bpy.context.object
+    apply_smooth_shading(cone_bawah)
+    assign_material_to_object(cone_bawah, mat_glass)
+
+    bpy.ops.mesh.primitive_cone_add(
+        radius1=CONE_RADIUS, radius2=0.015, depth=CONE_HEIGHT, vertices=16,
+        rotation=(math.radians(180), 0, 0),
+        location=(LOCATION[0], LOCATION[1], z_waist + CONE_HEIGHT / 2)
+    )
+    cone_atas = bpy.context.object
+    apply_smooth_shading(cone_atas)
+    assign_material_to_object(cone_atas, mat_glass)
+
+    return [cone_bawah, cone_atas], z_waist
+
+
+# ================================================================
+# BAGIAN 2: TUTUP ATAS & BAWAH (RANGKA)
+# ================================================================
+
+def create_caps(mat_frame, z_waist):
+    """Tutup silinder elegan di atas & bawah jam pasir."""
+    caps = []
+
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=CAP_RADIUS, depth=CAP_THICKNESS, vertices=20,
+        location=(LOCATION[0], LOCATION[1], CAP_THICKNESS / 2)
+    )
+    cap_bawah = bpy.context.object
+    apply_smooth_shading(cap_bawah)
+    assign_material_to_object(cap_bawah, mat_frame)
+    caps.append(cap_bawah)
+
+    z_top_cap = z_waist + CONE_HEIGHT + CAP_THICKNESS / 2
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=CAP_RADIUS, depth=CAP_THICKNESS, vertices=20,
+        location=(LOCATION[0], LOCATION[1], z_top_cap)
+    )
+    cap_atas = bpy.context.object
+    apply_smooth_shading(cap_atas)
+    assign_material_to_object(cap_atas, mat_frame)
+    caps.append(cap_atas)
+
+    # --- Aksen cincin tipis di tepi tiap tutup (detail elegan) ---
+    for z in (CAP_THICKNESS + 0.005, z_top_cap + CAP_THICKNESS / 2 - 0.005):
+        bpy.ops.mesh.primitive_torus_add(
+            major_radius=CAP_RADIUS * 0.95, minor_radius=0.012,
+            major_segments=20, minor_segments=6,
+            location=(LOCATION[0], LOCATION[1], z)
+        )
+        ring = bpy.context.object
+        apply_smooth_shading(ring)
+        assign_material_to_object(ring, mat_frame)
+        caps.append(ring)
+
+    return caps, z_top_cap
+
+
+# ================================================================
+# BAGIAN 3: 4 PILAR PENYANGGA
+# ================================================================
+
+def create_pillars(mat_frame, z_top_cap):
+    """4 silinder kecil mengelilingi tabung kaca sebagai rangka penyangga."""
+    pillars = []
+    total_height = z_top_cap + CAP_THICKNESS / 2  # dari alas sampai puncak tutup atas
+    z_center = total_height / 2
+
+    for angle_deg in (45, 135, 225, 315):
+        angle = math.radians(angle_deg)
+        px = LOCATION[0] + PILLAR_OFFSET * math.cos(angle)
+        py = LOCATION[1] + PILLAR_OFFSET * math.sin(angle)
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=PILLAR_RADIUS, depth=total_height, vertices=8,
+            location=(px, py, z_center)
+        )
+        pillar = bpy.context.object
+        apply_smooth_shading(pillar)
+        assign_material_to_object(pillar, mat_frame)
+        pillars.append(pillar)
+
+    return pillars
+
+
+# ================================================================
+# BAGIAN 4: AKSEN TUMPUKAN PASIR (CONE KECIL)
+# ================================================================
+
+def create_sand_accents(mat_sand, z_waist):
+    """Tumpukan pasir di dasar (menggunung, cone rebah) dan sedikit
+    sisa pasir di puncak dekat leher atas untuk kesan 'sedang berjalan'."""
+    sand_objs = []
+
+    # --- Tumpukan pasir di dasar (area utama sesuai request) ---
+    bpy.ops.mesh.primitive_cone_add(
+        radius1=SAND_BASE_RADIUS, radius2=0.0, depth=SAND_BASE_HEIGHT, vertices=14,
+        location=(LOCATION[0], LOCATION[1], CAP_THICKNESS + SAND_BASE_HEIGHT / 2)
+    )
+    sand_base = bpy.context.object
+    apply_smooth_shading(sand_base)
+    assign_material_to_object(sand_base, mat_sand)
+    sand_objs.append(sand_base)
+
+    # --- Sisa pasir kecil menggantung di leher atas (dekat titik pertemuan cone) ---
+    bpy.ops.mesh.primitive_cone_add(
+        radius1=SAND_TOP_RADIUS, radius2=0.0, depth=SAND_TOP_HEIGHT, vertices=10,
+        rotation=(math.radians(180), 0, 0),
+        location=(LOCATION[0], LOCATION[1], z_waist + CONE_HEIGHT - SAND_TOP_HEIGHT / 2 - 0.03)
+    )
+    sand_top = bpy.context.object
+    apply_smooth_shading(sand_top)
+    assign_material_to_object(sand_top, mat_sand)
+    sand_objs.append(sand_top)
+
+    return sand_objs
+
+
+# ================================================================
+# GENERATE JAM PASIR LENGKAP
+# ================================================================
+
+def create_jam_pasir():
+    mat_frame = create_material("Mat_JamPasir_Frame", COLOR_FRAME, roughness=0.35, metallic=0.6)
+    mat_glass = create_material("Mat_JamPasir_Glass", COLOR_GLASS, roughness=0.05, emission_strength=0.0)
+    mat_sand = create_material("Mat_JamPasir_Sand", COLOR_SAND, roughness=0.6, emission_strength=0.2)
+
+    glass_parts, z_waist = create_glass_tube(mat_glass)
+    cap_parts, z_top_cap = create_caps(mat_frame, z_waist)
+    pillar_parts = create_pillars(mat_frame, z_top_cap)
+    sand_parts = create_sand_accents(mat_sand, z_waist)
+
+    all_parts = cap_parts + pillar_parts + glass_parts + sand_parts
+
+    # --- Join semua part jadi satu object ---
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in all_parts:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = cap_parts[0]
+    bpy.ops.object.join()
+
+    final_obj = bpy.context.view_layer.objects.active
+    final_obj.name = "Item_JamPasir"
+    final_obj.data.name = "Item_JamPasir_Mesh"
+
+    # ------------------------------------------------------------
+    # Set origin TEPAT DI DASAR BAWAH tutup bawah
+    # ------------------------------------------------------------
+    bbox_world = [final_obj.matrix_world @ Vector(corner) for corner in final_obj.bound_box]
+    min_z = min(v.z for v in bbox_world)
+    center_x = sum(v.x for v in bbox_world) / 8
+    center_y = sum(v.y for v in bbox_world) / 8
+
+    cursor = bpy.context.scene.cursor
+    original_cursor_loc = cursor.location.copy()
+    cursor.location = (center_x, center_y, min_z)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    final_obj.select_set(True)
+    bpy.context.view_layer.objects.active = final_obj
+    bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
+
+    cursor.location = original_cursor_loc
+
+    print(f"✅ '{final_obj.name}' berhasil dibuat dengan {len(final_obj.data.materials)} material slot.")
+    for i, m in enumerate(final_obj.data.materials):
+        print(f"   - Slot {i}: {m.name}")
+    print(f"   - Origin diletakkan di dasar tutup bawah: {tuple(round(c,3) for c in final_obj.location)}")
+
+    return final_obj
+
+
+# ================================================================
+# MAIN EXECUTION
+# ================================================================
+def main():
+    clear_scene()
+    obj = create_jam_pasir()
+
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            with bpy.context.temp_override(area=area):
+                bpy.ops.object.select_all(action='DESELECT')
+                obj.select_set(True)
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.view3d.view_selected()
+            break
+
+    print("✅ Generate selesai: Item_JamPasir siap di-export ke FBX.")
+
+
+if __name__ == "__main__":
+    main()

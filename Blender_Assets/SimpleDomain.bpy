@@ -1,0 +1,303 @@
+"""
+================================================================
+ ITEM 4: SIMPLE DOMAIN / SHIELD (DEFENSE BOOST) - HIGH DETAIL
+================================================================
+Script standalone untuk generate model shield/barrier dengan:
+    - Kubah pelindung (hemisphere) hasil bisect UV Sphere
+    - Dudukan platform heksagonal SOLID (punya ketebalan),
+      dengan Bevel modifier di-apply agar tepinya halus
+    - 2 cincin aksen "barrier" di pinggiran kubah
+    - 3 material slot (Kubah=Cyan, Dudukan=Abu Gelap, Aksen=Kuning)
+    - Origin tepat di DASAR BAWAH dudukan heksagonal
+
+Cara pakai:
+    1. Buka Blender -> tab "Scripting"
+    2. Paste script ini ke text editor
+    3. Run Script (Alt+P)
+    4. Object "Item_Shield" siap di-export ke FBX
+================================================================
+"""
+
+import bpy
+import bmesh
+import math
+from mathutils import Vector
+
+
+# ================================================================
+# KONFIGURASI
+# ================================================================
+
+LOCATION = (0, 0, 0)          # posisi dasar (X,Y), alas dudukan menyentuh Z=0
+
+DOME_RADIUS = 0.62
+DOME_SEGMENTS = 32
+DOME_RINGS = 16
+
+PEDESTAL_RADIUS = 0.78        # sedikit lebih besar dari dome, jadi dome "duduk" di atasnya
+PEDESTAL_THICKNESS = 0.16
+PEDESTAL_SIDES = 6            # heksagonal
+
+BEVEL_WIDTH = 0.02
+BEVEL_SEGMENTS = 3
+
+ACCENT_RING_MINOR_RADIUS = 0.03
+
+COLOR_DOME = (0.25, 0.75, 1.0, 0.55)     # Biru muda / Cyan terang (alpha untuk viewport transparansi)
+COLOR_PEDESTAL = (0.08, 0.08, 0.09, 1.0) # Abu gelap / hitam batu
+COLOR_ACCENT = (1.0, 0.9, 0.2, 1.0)      # Kuning terang
+
+
+# ================================================================
+# UTILITAS
+# ================================================================
+
+def clear_scene():
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+    for block in bpy.data.meshes:
+        if block.users == 0:
+            bpy.data.meshes.remove(block)
+    for mat in bpy.data.materials:
+        if mat.users == 0:
+            bpy.data.materials.remove(mat)
+
+
+def create_material(name, color, roughness=0.3, emission_strength=0.0):
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    mat.diffuse_color = color
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = color
+        if "Roughness" in bsdf.inputs:
+            bsdf.inputs["Roughness"].default_value = roughness
+        if emission_strength > 0:
+            if "Emission Color" in bsdf.inputs:
+                bsdf.inputs["Emission Color"].default_value = color
+                bsdf.inputs["Emission Strength"].default_value = emission_strength
+            elif "Emission" in bsdf.inputs:
+                bsdf.inputs["Emission"].default_value = color
+                bsdf.inputs["Emission Strength"].default_value = emission_strength
+        # Dome sedikit transparan (efek barrier magis) - opsional, aman diabaikan exporter yg tak support alpha
+        if len(color) > 3 and color[3] < 1.0:
+            mat.blend_method = 'BLEND'
+            if "Alpha" in bsdf.inputs:
+                bsdf.inputs["Alpha"].default_value = color[3]
+    return mat
+
+
+def assign_material_to_object(obj, mat):
+    obj.data.materials.append(mat)
+
+
+def apply_smooth_shading(obj):
+    for poly in obj.data.polygons:
+        poly.use_smooth = True
+
+
+# ================================================================
+# BAGIAN 1: KUBAH PELINDUNG (HEMISPHERE)
+# ================================================================
+
+def create_dome(mat_dome):
+    """
+    UV Sphere yang dipotong jadi setengah (hemisphere) via bmesh bisect,
+    lalu diletakkan tepat di atas dudukan heksagonal.
+    """
+    z_base = PEDESTAL_THICKNESS  # dome duduk di atas dudukan
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        radius=DOME_RADIUS,
+        segments=DOME_SEGMENTS,
+        ring_count=DOME_RINGS,
+        location=(LOCATION[0], LOCATION[1], z_base)
+    )
+    dome = bpy.context.object
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(dome.data)
+    bmesh.ops.bisect_plane(
+        bm,
+        geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
+        plane_co=(0, 0, 0),   # plane lokal terhadap object (z lokal = 0 -> tepat di z_base dunia)
+        plane_no=(0, 0, 1),
+        clear_inner=True,
+        clear_outer=False
+    )
+    bmesh.ops.holes_fill(bm, edges=bm.edges[:])
+    bmesh.update_edit_mesh(dome.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    apply_smooth_shading(dome)
+    assign_material_to_object(dome, mat_dome)
+    return dome
+
+
+# ================================================================
+# BAGIAN 2: DUDUKAN HEKSAGONAL (SOLID, DENGAN BEVEL)
+# ================================================================
+
+def create_pedestal(mat_pedestal):
+    """
+    Platform heksagonal solid (punya ketebalan penuh, bukan disc tipis).
+    Bevel modifier ditambahkan & DI-APPLY di sini (per-object), sebelum
+    join, supaya hanya dudukan yang punya edge halus - dome & aksen
+    tidak ikut terpengaruh bevel ini.
+    """
+    z_center = PEDESTAL_THICKNESS / 2
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=PEDESTAL_RADIUS,
+        depth=PEDESTAL_THICKNESS,
+        vertices=PEDESTAL_SIDES,
+        location=(LOCATION[0], LOCATION[1], z_center)
+    )
+    pedestal = bpy.context.object
+    pedestal.name = "Pedestal_TEMP"
+
+    # --- Bevel modifier untuk menghaluskan tepi tajam heksagonal ---
+    bevel_mod = pedestal.modifiers.new(name="Bevel_Pedestal", type='BEVEL')
+    bevel_mod.width = BEVEL_WIDTH
+    bevel_mod.segments = BEVEL_SEGMENTS
+    bevel_mod.limit_method = 'ANGLE'
+    bevel_mod.angle_limit = math.radians(30)
+
+    bpy.context.view_layer.objects.active = pedestal
+    bpy.ops.object.modifier_apply(modifier=bevel_mod.name)
+
+    apply_smooth_shading(pedestal)
+    assign_material_to_object(pedestal, mat_pedestal)
+    return pedestal
+
+
+# ================================================================
+# BAGIAN 3: CINCIN AKSEN "BARRIER" DI PINGGIRAN KUBAH
+# ================================================================
+
+def create_accent_rings(mat_accent):
+    """
+    2 cincin tipis (torus) mengelilingi pinggiran kubah untuk kesan
+    ukiran/barrier magis: satu tepat di garis dasar kubah, satu lagi
+    sedikit di atasnya (lebih kecil) sebagai ukiran kedua.
+    """
+    ring_objs = []
+    z_base = PEDESTAL_THICKNESS
+
+    # --- Cincin 1: tepat di garis dasar kubah (paling besar) ---
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=DOME_RADIUS * 0.98,
+        minor_radius=ACCENT_RING_MINOR_RADIUS,
+        major_segments=PEDESTAL_SIDES * 4,  # kelipatan 6 biar selaras visual dgn hex
+        minor_segments=8,
+        location=(LOCATION[0], LOCATION[1], z_base + 0.01)
+    )
+    ring1 = bpy.context.object
+    apply_smooth_shading(ring1)
+    assign_material_to_object(ring1, mat_accent)
+    ring_objs.append(ring1)
+
+    # --- Cincin 2: ukiran kedua, sedikit lebih kecil & naik di badan kubah ---
+    ring2_radius = DOME_RADIUS * 0.78
+    ring2_height = z_base + math.sqrt(max(DOME_RADIUS**2 - ring2_radius**2, 0)) * 0.35 + 0.05
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=ring2_radius,
+        minor_radius=ACCENT_RING_MINOR_RADIUS * 0.7,
+        major_segments=PEDESTAL_SIDES * 4,
+        minor_segments=8,
+        location=(LOCATION[0], LOCATION[1], ring2_height)
+    )
+    ring2 = bpy.context.object
+    apply_smooth_shading(ring2)
+    assign_material_to_object(ring2, mat_accent)
+    ring_objs.append(ring2)
+
+    # --- 6 titik aksen kecil (rune/gem) di pinggiran dudukan, sejajar sisi heksagon ---
+    for i in range(PEDESTAL_SIDES):
+        angle = math.radians(60 * i + 30)  # offset 30 derajat biar pas di tengah sisi hex
+        rx = (PEDESTAL_RADIUS - 0.08) * math.cos(angle)
+        ry = (PEDESTAL_RADIUS - 0.08) * math.sin(angle)
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            radius=0.035, segments=8, ring_count=6,
+            location=(LOCATION[0] + rx, LOCATION[1] + ry, PEDESTAL_THICKNESS + 0.02)
+        )
+        gem = bpy.context.object
+        apply_smooth_shading(gem)
+        assign_material_to_object(gem, mat_accent)
+        ring_objs.append(gem)
+
+    return ring_objs
+
+
+# ================================================================
+# GENERATE SHIELD LENGKAP
+# ================================================================
+
+def create_shield():
+    mat_dome = create_material("Mat_Shield_Dome", COLOR_DOME, roughness=0.15, emission_strength=0.8)
+    mat_pedestal = create_material("Mat_Shield_Pedestal", COLOR_PEDESTAL, roughness=0.7)
+    mat_accent = create_material("Mat_Shield_Accent", COLOR_ACCENT, roughness=0.2, emission_strength=1.5)
+
+    dome = create_dome(mat_dome)
+    pedestal = create_pedestal(mat_pedestal)
+    accents = create_accent_rings(mat_accent)
+
+    all_parts = [pedestal, dome] + accents
+
+    # --- Join semua part jadi satu object ---
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in all_parts:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = pedestal
+    bpy.ops.object.join()
+
+    final_obj = bpy.context.view_layer.objects.active
+    final_obj.name = "Item_Shield"
+    final_obj.data.name = "Item_Shield_Mesh"
+
+    # ------------------------------------------------------------
+    # Set origin TEPAT DI DASAR BAWAH dudukan heksagonal
+    # ------------------------------------------------------------
+    bbox_world = [final_obj.matrix_world @ Vector(corner) for corner in final_obj.bound_box]
+    min_z = min(v.z for v in bbox_world)
+    center_x = sum(v.x for v in bbox_world) / 8
+    center_y = sum(v.y for v in bbox_world) / 8
+
+    cursor = bpy.context.scene.cursor
+    original_cursor_loc = cursor.location.copy()
+    cursor.location = (center_x, center_y, min_z)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    final_obj.select_set(True)
+    bpy.context.view_layer.objects.active = final_obj
+    bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
+
+    cursor.location = original_cursor_loc
+
+    print(f"✅ '{final_obj.name}' berhasil dibuat dengan {len(final_obj.data.materials)} material slot.")
+    for i, m in enumerate(final_obj.data.materials):
+        print(f"   - Slot {i}: {m.name}")
+    print(f"   - Origin diletakkan di dasar dudukan: {tuple(round(c,3) for c in final_obj.location)}")
+
+    return final_obj
+
+
+# ================================================================
+# MAIN EXECUTION
+# ================================================================
+def main():
+    clear_scene()
+    obj = create_shield()
+
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            with bpy.context.temp_override(area=area):
+                bpy.ops.object.select_all(action='DESELECT')
+                obj.select_set(True)
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.view3d.view_selected()
+            break
+
+    print("✅ Generate selesai: Item_Shield siap di-export ke FBX.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,71 @@
+local hitbox = script.Parent
+local visualModel = hitbox:FindFirstChildOfClass("Model")
+local pointLight = hitbox:FindFirstChildOfClass("PointLight")
+local RunService = game:GetService("RunService")
+
+local heightOffset = 4.0 
+local timeElapsed = 0
+
+-- Simpan status transparansi asli (agar tidak hilang warnanya)
+local originalTransparencies = {}
+if visualModel then
+	task.wait(0.5) -- Tunggu loading aman
+	for _, part in ipairs(visualModel:GetDescendants()) do
+		if part:IsA("BasePart") or part:IsA("MeshPart") then
+			-- Simpan transparansi asli, jika 1 (tak terlihat), paksa jadi 0
+			originalTransparencies[part] = (part.Transparency >= 1) and 0 or part.Transparency
+		end
+	end
+end
+
+-- Fungsi kontrol visibilitas
+local function setVisualVisible(isVisible)
+	if visualModel then
+		for part, origTrans in pairs(originalTransparencies) do
+			part.Transparency = isVisible and origTrans or 1
+		end
+	end
+	if pointLight then
+		pointLight.Enabled = isVisible
+	end
+end
+
+-- ============================================================
+-- LOGIKA "FULL REACTIVE"
+-- ============================================================
+local function updateState()
+	-- Item dianggap "Mati/Diambil" jika TRANSPARANSI 1 
+	-- ATAU CANTouch FALSE (sensor dimatikan BoostManager)
+	local isDead = (hitbox.Transparency >= 1) or (not hitbox.CanTouch)
+
+	setVisualVisible(not isDead)
+end
+
+-- Dengar segala perubahan properti dari BoostManager
+hitbox:GetPropertyChangedSignal("Transparency"):Connect(updateState)
+hitbox:GetPropertyChangedSignal("CanTouch"):Connect(updateState)
+
+-- Eksekusi awal saat pertama kali muncul
+updateState()
+
+-- ============================================================
+-- ANIMASI
+-- ============================================================
+RunService.Heartbeat:Connect(function(dt)
+	-- Jika item sedang tidak aktif, berhenti beranimasi (hemat CPU)
+	if (hitbox.Transparency >= 1) or (not hitbox.CanTouch) then return end
+
+	timeElapsed = timeElapsed + dt
+
+	local baseCFrame = hitbox.CFrame * CFrame.new(0, heightOffset, 0)
+	local bobbingOffset = CFrame.new(0, math.sin(timeElapsed * 3) * 0.5, 0)
+	local rotationOffset = CFrame.Angles(0, timeElapsed * 2, 0)
+
+	if visualModel then
+		visualModel:PivotTo(baseCFrame * bobbingOffset * rotationOffset)
+	end
+
+	if pointLight and pointLight.Enabled then
+		pointLight.Brightness = 2.5 + math.sin(timeElapsed * 4) * 1
+	end
+end)

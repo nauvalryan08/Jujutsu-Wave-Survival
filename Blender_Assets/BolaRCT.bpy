@@ -1,0 +1,231 @@
+"""
+================================================================
+ ITEM 3: BOLA REVERSE CT (HEAL BOOST) - HIGH DETAIL GENERATOR
+================================================================
+Script standalone (berdiri sendiri) untuk generate model
+"Bola Reverse CT" dengan:
+    - UV Sphere inti, high-poly, smooth shading
+    - 3 cincin energi (Torus) mengorbit dengan sudut asimetris
+    - 2 material slot (Inti = Cyan glow, Cincin = Kuning glow)
+    - Origin tepat di pusat bola (siap untuk floating object)
+
+Cara pakai:
+    1. Buka Blender -> tab "Scripting"
+    2. Paste script ini ke text editor
+    3. Run Script (Alt+P)
+    4. Object "Item_BolaReverse" siap di-export ke FBX
+
+Note: Warna material dibuat lewat Principled BSDF (Base Color +
+Emission) supaya tetap terbawa saat export FBX ke Roblox Studio.
+================================================================
+"""
+
+import bpy
+import math
+
+
+# ================================================================
+# KONFIGURASI (silakan diubah sesuai kebutuhan)
+# ================================================================
+
+LOCATION = (0, 0, 0)          # posisi awal object (origin nanti tetap di sini)
+
+# --- Bola inti ---
+CORE_RADIUS = 0.5
+CORE_SEGMENTS = 64             # tinggi -> permukaan mulus
+CORE_RINGS = 32
+
+# --- Cincin orbit ---
+RING_COUNT = 3
+RING_MAJOR_RADIUS = 0.72
+RING_MINOR_RADIUS = 0.035
+RING_MAJOR_SEGMENTS = 48
+RING_MINOR_SEGMENTS = 12
+# Sudut kemiringan tiap cincin dibuat asimetris/menyilang (derajat)
+RING_ROTATIONS = [
+    (15, 5, 0),
+    (60, 25, 45),
+    (100, -20, 80),
+]
+
+# --- Warna material ---
+COLOR_CORE = (1.0, 0.05, 0.05, 1.0)     # Merah terang
+COLOR_RING = (0.05, 0.2,  1.0, 1.0)     # Biru terang
+EMISSION_STRENGTH_CORE = 3.5
+EMISSION_STRENGTH_RING = 2.0
+
+
+# ================================================================
+# UTILITAS
+# ================================================================
+
+def clear_scene():
+    """Hapus semua object di scene (termasuk default cube)."""
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+
+    for block in bpy.data.meshes:
+        if block.users == 0:
+            bpy.data.meshes.remove(block)
+    for mat in bpy.data.materials:
+        if mat.users == 0:
+            bpy.data.materials.remove(mat)
+
+
+def create_glow_material(name, color, emission_strength):
+    """
+    Buat material baru dengan Principled BSDF:
+    - Base Color = warna utama (tetap kelihatan meski tanpa emission)
+    - Emission   = efek 'menyala' untuk look energi/heal
+    Material ini aman di-export ke FBX (Base Color akan terbawa
+    sebagai vertex/texture color dasar di Roblox Studio).
+    """
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    mat.diffuse_color = color  # fallback warna solid (viewport & beberapa exporter)
+
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = color
+        # Nama input Emission berbeda antar versi Blender:
+        if "Emission Color" in bsdf.inputs:
+            bsdf.inputs["Emission Color"].default_value = color
+            bsdf.inputs["Emission Strength"].default_value = emission_strength
+        elif "Emission" in bsdf.inputs:
+            bsdf.inputs["Emission"].default_value = color
+            bsdf.inputs["Emission Strength"].default_value = emission_strength
+
+        if "Roughness" in bsdf.inputs:
+            bsdf.inputs["Roughness"].default_value = 0.2
+
+    return mat
+
+
+def set_origin_to_geometry_center(obj):
+    """Pastikan origin object berada tepat di titik tengah geometry-nya."""
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='MEDIAN')
+
+
+# ================================================================
+# GENERATE BOLA REVERSE CT
+# ================================================================
+
+def create_bola_reverse_ct():
+    parts_core = []
+    parts_ring = []
+
+    # ------------------------------------------------------------
+    # 1. Bola inti (UV Sphere, high-poly untuk smooth shading)
+    # ------------------------------------------------------------
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        radius=CORE_RADIUS,
+        segments=CORE_SEGMENTS,
+        ring_count=CORE_RINGS,
+        location=LOCATION
+    )
+    core_obj = bpy.context.object
+    core_obj.name = "BolaReverse_Core_TEMP"
+
+    # Smooth shading untuk permukaan bola
+    for poly in core_obj.data.polygons:
+        poly.use_smooth = True
+
+    parts_core.append(core_obj)
+
+    # ------------------------------------------------------------
+    # 2. Cincin energi (Torus) - mengorbit dengan sudut asimetris
+    # ------------------------------------------------------------
+    ring_objs = []
+    for i in range(RING_COUNT):
+        rot_deg = RING_ROTATIONS[i % len(RING_ROTATIONS)]
+        rot_rad = tuple(math.radians(a) for a in rot_deg)
+
+        bpy.ops.mesh.primitive_torus_add(
+            major_radius=RING_MAJOR_RADIUS,
+            minor_radius=RING_MINOR_RADIUS,
+            major_segments=RING_MAJOR_SEGMENTS,
+            minor_segments=RING_MINOR_SEGMENTS,
+            location=LOCATION,
+            rotation=rot_rad
+        )
+        ring_obj = bpy.context.object
+        ring_obj.name = f"BolaReverse_Ring_{i+1}_TEMP"
+
+        for poly in ring_obj.data.polygons:
+            poly.use_smooth = True
+
+        ring_objs.append(ring_obj)
+
+    parts_ring.extend(ring_objs)
+
+    # ------------------------------------------------------------
+    # 3. Buat & assign material SEBELUM join
+    #    (supaya material slot tetap terpisah per bagian:
+    #     slot 0 = inti, slot 1 = cincin)
+    # ------------------------------------------------------------
+    mat_core = create_glow_material("Mat_BolaReverse_Core", COLOR_CORE, EMISSION_STRENGTH_CORE)
+    mat_ring = create_glow_material("Mat_BolaReverse_Ring", COLOR_RING, EMISSION_STRENGTH_RING)
+
+    core_obj.data.materials.append(mat_core)
+    for ring_obj in ring_objs:
+        ring_obj.data.materials.append(mat_ring)
+
+    # ------------------------------------------------------------
+    # 4. Join semua part jadi satu object
+    #    (join otomatis menggabungkan material slot dari semua
+    #     object sumber, jadi hasil akhir punya 2 slot: Core & Ring)
+    # ------------------------------------------------------------
+    bpy.ops.object.select_all(action='DESELECT')
+    all_parts = parts_core + parts_ring
+    for obj in all_parts:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = core_obj  # active object jadi target join
+
+    bpy.ops.object.join()
+
+    final_obj = bpy.context.view_layer.objects.active
+    final_obj.name = "Item_BolaReverse"
+    final_obj.data.name = "Item_BolaReverse_Mesh"
+
+    # ------------------------------------------------------------
+    # 5. Set origin tepat di pusat bola (untuk floating object)
+    # ------------------------------------------------------------
+    # Karena bola & semua ring sama-sama berpusat di LOCATION,
+    # median geometry-nya otomatis jatuh di titik pusat bola.
+    set_origin_to_geometry_center(final_obj)
+
+    # Pastikan posisi object tetap di LOCATION yang diinginkan
+    final_obj.location = LOCATION
+
+    print(f"✅ '{final_obj.name}' berhasil dibuat dengan {len(final_obj.data.materials)} material slot.")
+    print(f"   - Slot 0: {final_obj.data.materials[0].name}")
+    print(f"   - Slot 1: {final_obj.data.materials[1].name}")
+
+    return final_obj
+
+
+# ================================================================
+# MAIN EXECUTION
+# ================================================================
+def main():
+    clear_scene()
+    obj = create_bola_reverse_ct()
+
+    # Frame object di viewport (jika ada area 3D View)
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            with bpy.context.temp_override(area=area):
+                bpy.ops.object.select_all(action='DESELECT')
+                obj.select_set(True)
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.view3d.view_selected()
+            break
+
+    print("✅ Generate selesai: Item_BolaReverse siap di-export ke FBX.")
+
+
+if __name__ == "__main__":
+    main()
