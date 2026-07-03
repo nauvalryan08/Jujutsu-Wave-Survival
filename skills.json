@@ -1,0 +1,17 @@
+{
+  "Yuji": {
+    "Q": { "name": "Divergent Fist", "damage": 35, "cooldown": 4 },
+    "E": { "name": "Black Flash", "damage": 60, "cooldown": 8 },
+    "R": { "name": "Punisher Kick", "damage": 45, "cooldown": 6 }
+  },
+  "Gojo": {
+    "Q": { "name": "Lapse Blue", "damage": 20, "cooldown": 5 },
+    "E": { "name": "Reversal Red", "damage": 30, "cooldown": 5 },
+    "R": { "name": "Hollow Purple", "damage": 120, "cooldown": 15 }
+  },
+  "Sukuna": {
+    "Q": { "name": "Dismantle", "damage": 20, "cooldown": 5 },
+    "E": { "name": "Cleave", "damage": 50, "cooldown": 10 },
+    "R": { "name": "Fire Arrow", "damage": 100, "cooldown": 30 }
+  }
+}
